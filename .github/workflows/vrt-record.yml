@@ -1,0 +1,73 @@
+name: Record VRT Snapshots
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.swift'
+      - '**/*.xib'
+      - '**/*.storyboard'
+      - 'ios-app/**'
+
+jobs:
+  record-snapshots:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      SCHEME: ios-appTests
+      DESTINATION: 'platform=iOS Simulator,name=iPhone 16,OS=18.6'
+      SNAPSHOT_ARTIFACTS: ${{ github.workspace }}/snapshot-artifacts
+      # Enable recording mode for swift-snapshot-testing
+      RECORD_MODE: "1"
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v3
+      with:
+        xcode-version: '16'
+
+    - name: Resolve Package Dependencies
+      run: |
+        cd ios-app
+        xcodebuild -resolvePackageDependencies -project ios-app.xcodeproj
+
+    - name: Run tests in record mode
+      run: |
+        mkdir -p "$SNAPSHOT_ARTIFACTS"
+        cd ios-app
+        set -o pipefail && xcodebuild \
+          -project ios-app.xcodeproj \
+          -scheme "$SCHEME" \
+          -only-testing:ios-appTests/ContentViewSnapshotTests \
+          -destination "$DESTINATION" \
+          -resultBundlePath ../TestResults.xcresult \
+          test | xcpretty
+
+    - name: Commit new snapshots
+      run: |
+        git config user.name "VRT Bot"
+        git config user.email "vrt-bot@example.com"
+        git add -A
+        if ! git diff --cached --quiet; then
+          git commit -m "chore: update VRT reference snapshots [skip ci]
+          
+          🤖 Generated with Claude Code
+          
+          Co-Authored-By: Claude <noreply@anthropic.com>"
+          git push
+        else
+          echo "No snapshot changes to commit"
+        fi
+
+    - name: Upload recorded snapshots
+      uses: actions/upload-artifact@v4
+      with:
+        name: recorded-snapshots-${{ github.sha }}
+        path: |
+          ios-app/**/__Snapshots__/**/*.png
+          snapshot-artifacts
+        retention-days: 7

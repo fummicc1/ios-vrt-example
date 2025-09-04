@@ -1,0 +1,88 @@
+name: iOS VRT Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.swift'
+      - '**/*.xib'
+      - '**/*.storyboard'
+      - 'ios-app/**'
+      - '.github/workflows/vrt-tests.yml'
+
+jobs:
+  vrt-tests:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      SCHEME: ios-appTests
+      DESTINATION: 'platform=iOS Simulator,name=iPhone 16,OS=18.6'
+      SNAPSHOT_ARTIFACTS: ${{ github.workspace }}/snapshot-artifacts
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v3
+      with:
+        xcode-version: '16'
+
+    - name: Resolve Package Dependencies
+      run: |
+        cd ios-app
+        xcodebuild -resolvePackageDependencies -project ios-app.xcodeproj
+
+    - name: Build and Test
+      id: test
+      continue-on-error: true
+      run: |
+        mkdir -p "$SNAPSHOT_ARTIFACTS"
+        cd ios-app
+        set -o pipefail && xcodebuild \
+          -project ios-app.xcodeproj \
+          -scheme "$SCHEME" \
+          -destination "$DESTINATION" \
+          -resultBundlePath ../TestResults.xcresult \
+          test | xcpretty -r junit --output ../tests.xml
+
+    - name: Upload snapshot artifacts
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: vrt-snapshots-${{ github.sha }}
+        path: snapshot-artifacts
+        retention-days: 30
+
+    - name: Upload test results
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ github.sha }}
+        path: TestResults.xcresult
+        retention-days: 30
+
+    - name: Comment on PR
+      if: failure() && github.event_name == 'pull_request'
+      uses: peter-evans/create-or-update-comment@v4
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        body: |
+          ### 📸 VRT スナップショットテストに変更が検出されました
+          
+          コミット **${{ github.sha }}** でスナップショットの差分が発生しました。
+          
+          **[🔗 アーティファクトをダウンロード](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})**
+          
+          - `vrt-snapshots-${{ github.sha }}`: 差分画像とスナップショット
+          - `test-results-${{ github.sha }}`: 詳細なテスト結果
+          
+          ### 📋 対応方法
+          1. アーティファクトをダウンロードして差分画像を確認
+          2. 意図的な変更の場合: `record` モードでテストを実行してスナップショットを更新
+          3. 予期しない変更の場合: コードを修正してVRTテストを再実行
+
+    - name: Fail job on test failure
+      if: steps.test.outcome == 'failure'
+      run: exit 1
